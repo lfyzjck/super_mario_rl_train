@@ -1,9 +1,7 @@
-import copy
 import datetime
-import os
-import random
-import time
-from collections import deque
+
+# setup parser
+import argparse
 from pathlib import Path
 
 # Gym is an OpenAI toolkit for RL
@@ -28,12 +26,23 @@ from metrics import MetricLogger
 from utils import find_latest_checkpoint, create_env
 from agent import Mario
 from wrappers import SkipFrame, GrayScaleObservation, ResizeObservation
+
 # %%
 # Initialize Super Mario environment
 env = create_env()
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description='Super Mario Bros Training')
+    parser.add_argument('--batch-size', type=int, default=64,
+                    help='batch size for training (default: 64)')
+    parser.add_argument('--render', action='store_true',
+                    help='render the game while training')
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = parse_args()
     use_cuda = torch.cuda.is_available()
     print(f"Using CUDA: {use_cuda}")
     print()
@@ -42,11 +51,15 @@ if __name__ == "__main__":
         "%Y-%m-%dT%H-%M-%S"
     )
     save_dir.mkdir(parents=True)
-    checkpoint = find_latest_checkpoint(Path('checkpoints'))
+    checkpoint = find_latest_checkpoint(Path("checkpoints"))
     print(f"Loading checkpoint from {checkpoint}")
 
     mario = Mario(
-        state_dim=(4, 84, 84), action_dim=env.action_space.n, save_dir=save_dir, checkpoint=checkpoint
+        state_dim=(4, 84, 84),
+        action_dim=env.action_space.n,
+        save_dir=save_dir,
+        checkpoint=checkpoint,
+        batch_size=args.batch_size
     )
 
     logger = MetricLogger(save_dir)
@@ -58,7 +71,9 @@ if __name__ == "__main__":
 
         # Play the game!
         while True:
-            #env.render()
+            if args.render:
+                env.render()
+            # env.render()
 
             # Run agent on the state
             action = mario.act(state)
@@ -88,4 +103,3 @@ if __name__ == "__main__":
             logger.record(
                 episode=e, epsilon=mario.exploration_rate, step=mario.curr_step
             )
-

@@ -6,6 +6,7 @@ from torch import nn
 from tensordict import TensorDict
 from torchrl.data import TensorDictReplayBuffer, LazyMemmapStorage
 
+
 class MarioNet(nn.Module):
     """mini cnn structure
     input -> (conv2d + relu) x 3 -> flatten -> (dense + relu) x 2 -> output
@@ -45,8 +46,20 @@ class MarioNet(nn.Module):
         elif model == "target":
             return self.target(input)
 
+
 class Mario:
-    def __init__(self, state_dim, action_dim, save_dir, checkpoint: Path=None):
+    def __init__(
+        self, 
+        state_dim, 
+        action_dim, 
+        save_dir, 
+        checkpoint: Path | None = None,
+        batch_size: int = 32,
+        gamma: float = 0.9,
+        burnin: float = 1e5,
+        learn_every: int = 4,
+        sync_every: float = 1e4
+    ):
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.save_dir = save_dir
@@ -68,21 +81,24 @@ class Mario:
         if checkpoint:
             self.load(checkpoint)
 
+        # Hyperparameters
         self.exploration_rate = 1
         self.exploration_rate_decay = 0.99999975
         self.exploration_rate_min = 0.1
         self.curr_step = 0
 
         self.save_every = 3e4  # no. of experiences between saving Mario Net
-        self.memory = TensorDictReplayBuffer(storage=LazyMemmapStorage(100000, device=torch.device("cpu")))
-        self.batch_size = 32
-        self.gamma = 0.9
+        self.memory = TensorDictReplayBuffer(
+            storage=LazyMemmapStorage(100000, device=torch.device("cpu"))
+        )
+        self.batch_size = batch_size
+        self.gamma = gamma
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=0.00025)
         self.loss_fn = torch.nn.SmoothL1Loss()
 
-        self.burnin = 1e5  # min. experiences before training
-        self.learn_every = 4  # no. of experiences between updates to Q_online
-        self.sync_every = 1e4  # no. of experiences between Q_target & Q_online sync
+        self.burnin = burnin  # min. experiences before training
+        self.learn_every = learn_every  # no. of experiences between updates to Q_online
+        self.sync_every = sync_every  # no. of experiences between Q_target & Q_online sync
 
     def act(self, state):
         """
@@ -105,7 +121,7 @@ class Mario:
                 state = torch.tensor(state)
             state = state.unsqueeze(0)
             action_values = self.net(state, model="online")
-            action_idx = torch.argmax(action_values, axis=1).item()
+            action_idx = torch.argmax(action_values, dim=1).item()
 
         # decrease exploration_rate
         self.exploration_rate *= self.exploration_rate_decay
@@ -130,11 +146,11 @@ class Mario:
         next_state = next_state.__array__()
 
         if self.use_cuda:
-            state = torch.tensor(state).cuda()
-            next_state = torch.tensor(next_state).cuda()
-            action = torch.tensor([action]).cuda()
-            reward = torch.tensor([reward]).cuda()
-            done = torch.tensor([done]).cuda()
+            state = torch.tensor(state).cuda(device=self.device)
+            next_state = torch.tensor(next_state).cuda(device=self.device)
+            action = torch.tensor([action]).cuda(device=self.device)
+            reward = torch.tensor([reward]).cuda(device=self.device)
+            done = torch.tensor([done]).cuda(device=self.device)
         else:
             state = torch.tensor(state)
             next_state = torch.tensor(next_state)
@@ -142,14 +158,28 @@ class Mario:
             reward = torch.tensor([reward])
             done = torch.tensor([done])
 
-        self.memory.add(TensorDict({"state": state, "next_state": next_state, "action": action, "reward": reward, "done": done}, batch_size=[]))
+        self.memory.add(
+            TensorDict(
+                {
+                    "state": state,
+                    "next_state": next_state,
+                    "action": action,
+                    "reward": reward,
+                    "done": done,
+                },
+                batch_size=[],
+            )
+        )
 
     def recall(self):
         """
         Retrieve a batch of experiences from memory
         """
         batch = self.memory.sample(self.batch_size).to(self.device)
-        state, next_state, action, reward, done = (batch.get(key) for key in ("state", "next_state", "action", "reward", "done"))
+        state, next_state, action, reward, done = (
+            batch.get(key)
+            for key in ("state", "next_state", "action", "reward", "done")
+        )
         return state, next_state, action.squeeze(), reward.squeeze(), done.squeeze()
 
     def td_estimate(self, state, action):
@@ -161,7 +191,7 @@ class Mario:
     @torch.no_grad()
     def td_target(self, reward, next_state, done):
         next_state_Q = self.net(next_state, model="online")
-        best_action = torch.argmax(next_state_Q, axis=1)
+        best_action = torch.argmax(next_state_Q, dim=1)
         next_Q = self.net(next_state, model="target")[
             np.arange(0, self.batch_size), best_action
         ]
@@ -182,7 +212,13 @@ class Mario:
             self.save_dir / f"mario_net_{int(self.curr_step // self.save_every)}.chkpt"
         )
         torch.save(
-            dict(model=self.net.state_dict(), exploration_rate=self.exploration_rate),
+            {
+                'model': self.net.state_dict(),
+                'exploration_rate': self.exploration_rate,
+                'curr_step': self.curr_step,
+                'optimizer': self.optimizer.state_dict(),
+                'memory_size': len(self.memory),  # 只保存大小，不保存整个内存
+            },
             save_path,
         )
         print(f"MarioNet saved to {save_path} at step {self.curr_step}")
@@ -192,12 +228,36 @@ class Mario:
         if not load_path.exists():
             raise ValueError(f"Checkpoint {load_path} does not exist")
 
-        ckp = torch.load(load_path, map_location=self.device)
-        exploration_rate = ckp.get("exploration_rate")
-        state_dict = ckp.get("model")
-        print(f"loading model at {load_path} with exploration rate {exploration_rate}")
-        self.net.load_state_dict(state_dict)
-        self.exploration_rate = exploration_rate
+        try:
+            ckp = torch.load(load_path, map_location=self.device)
+            
+            # 加载模型参数
+            if 'model' in ckp:
+                self.net.load_state_dict(ckp['model'])
+            else:
+                print("Warning: Model state not found in checkpoint")
+            
+            # 加载探索率
+            if 'exploration_rate' in ckp:
+                self.exploration_rate = ckp['exploration_rate']
+            
+            # 加载当前步数
+            if 'curr_step' in ckp:
+                self.curr_step = ckp['curr_step']
+            
+            # 加载优化器状态
+            if 'optimizer' in ckp and self.optimizer is not None:
+                self.optimizer.load_state_dict(ckp['optimizer'])
+            
+            print(f"Successfully loaded model from {load_path}")
+            print(f"Current step: {self.curr_step}, Exploration rate: {self.exploration_rate}")
+            
+            if 'memory_size' in ckp:
+                print(f"Previous memory size: {ckp['memory_size']}")
+            
+        except Exception as e:
+            print(f"Error loading checkpoint: {e}")
+            raise
 
     def learn(self):
         if self.curr_step % self.sync_every == 0:
@@ -224,4 +284,4 @@ class Mario:
         # Backpropagate loss through Q_online
         loss = self.update_Q_online(td_est, td_tgt)
 
-        return (td_est.mean().item(), loss) 
+        return (td_est.mean().item(), loss)

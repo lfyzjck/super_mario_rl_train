@@ -5,7 +5,13 @@ import gym
 import gym_super_mario_bros
 from gym.wrappers import FrameStack, TransformObservation
 from nes_py.wrappers import JoypadSpace
-from wrappers import SkipFrame, GrayScaleObservation, ResizeObservation
+from wrappers import (
+    ScoreRewardWrapper,
+    SkipFrame,
+    GrayScaleObservation,
+    ResizeObservation,
+    ProgressRewardWrapper,
+)
 
 
 def find_latest_checkpoint(save_dir: Path) -> Path | None:
@@ -13,25 +19,31 @@ def find_latest_checkpoint(save_dir: Path) -> Path | None:
     checkpoints = list(save_dir.rglob("*.chkpt"))
     if not checkpoints:
         return None
-    return sorted(checkpoints)[-1] 
+    return sorted(checkpoints)[-1]
 
 
 def create_env() -> gym.Env:
     """
     Create a Super Mario Bros environment
     """
-    env = gym_super_mario_bros.make('SuperMarioBros-1-1-v0')
+    env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0")
 
-    env = JoypadSpace(
-        env,
-        [['right'],
-        ['right', 'A']]
-    )
+    env = JoypadSpace(env, [["right"], ["right", "A"]])
 
+    # 添加进度奖励
+    env = ProgressRewardWrapper(env)
+    # 添加得分奖励
+    env = ScoreRewardWrapper(env, score_weight=0.01)
+
+
+    # 跳帧
     env = SkipFrame(env, skip=5)
+    # 灰度化
     env = GrayScaleObservation(env)
+    # 调整大小
     env = ResizeObservation(env, shape=84)
-    env = TransformObservation(env, f=lambda x: x / 255.)
+    # 归一化
+    env = TransformObservation(env, f=lambda x: x / 255.0)
     env = FrameStack(env, num_stack=4)
 
     env.reset()
@@ -40,5 +52,4 @@ def create_env() -> gym.Env:
 
 
 if __name__ == "__main__":
-    print(find_latest_checkpoint(Path('checkpoints')))
-
+    print(find_latest_checkpoint(Path("checkpoints")))
