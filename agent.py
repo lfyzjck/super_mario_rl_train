@@ -78,9 +78,6 @@ class Mario:
         if self.device == "cuda" or self.device == "mps":
             self.net = self.net.to(device=self.device)
 
-        if checkpoint:
-            self.load(checkpoint)
-
         # Hyperparameters
         self.exploration_rate = 1
         self.exploration_rate_decay = 0.99999975
@@ -99,6 +96,10 @@ class Mario:
         self.burnin = burnin  # min. experiences before training
         self.learn_every = learn_every  # no. of experiences between updates to Q_online
         self.sync_every = sync_every  # no. of experiences between Q_target & Q_online sync
+
+        # Load checkpoint after all attributes have been initialized
+        if checkpoint:
+            self.load(checkpoint)
 
     def act(self, state):
         """
