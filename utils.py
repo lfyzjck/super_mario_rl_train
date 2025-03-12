@@ -3,7 +3,8 @@ from pathlib import Path
 
 import gym
 import gym_super_mario_bros
-from gym.wrappers import FrameStack, TransformObservation
+from gym.wrappers.frame_stack import FrameStack
+from gym.wrappers.transform_observation import TransformObservation
 from nes_py.wrappers import JoypadSpace
 from wrappers import (
     ScoreRewardWrapper,
@@ -33,11 +34,11 @@ def create_env() -> gym.Env:
     # 添加进度奖励
     env = ProgressRewardWrapper(env)
     # 添加得分奖励
-    env = ScoreRewardWrapper(env, score_weight=0.01)
+    env = ScoreRewardWrapper(env, score_weight=0.01, death_penalty=10.0)
 
 
     # 跳帧
-    env = SkipFrame(env, skip=5)
+    env = SkipFrame(env, skip=4)
     # 灰度化
     env = GrayScaleObservation(env)
     # 调整大小

@@ -14,4 +14,6 @@ dependencies = [
     "torchrl>=0.7.2",
     "torchvision>=0.21.0",
     "numpy<2.0.0",
+    "tensorboard>=2.19.0",
+    "tensorboard-plugin-profile>=2.19.0",
 ]

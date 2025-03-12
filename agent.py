@@ -176,7 +176,7 @@ class Mario:
         """
         Retrieve a batch of experiences from memory
         """
-        batch = self.memory.sample(self.batch_size).to(self.device)
+        batch = self.memory.sample(self.batch_size).to("cpu")
         state, next_state, action, reward, done = (
             batch.get(key)
             for key in ("state", "next_state", "action", "reward", "done")

@@ -77,7 +77,7 @@ class ResizeObservation(gym.ObservationWrapper):
             # Ensure the array is in the format [C, H, W]
             if observation.ndim == 3 and observation.shape[2] <= 3:  # [H, W, C] format
                 observation = np.transpose(observation, (2, 0, 1))
-            observation = torch.tensor(observation.copy(), dtype=torch.float)
+            observation = torch.tensor(observation.copy(), dtype=torch.float32)
         
         transforms = T.Compose([T.Resize(self.shape), T.Normalize(0, 255)])
         observation = transforms(observation).squeeze(0)
@@ -120,14 +120,17 @@ class ProgressRewardWrapper(gym.Wrapper):
         
         # 新的最大位置奖励
         if current_x_pos > self.max_x_pos:
-            progress_reward += 0.1 * (current_x_pos - self.max_x_pos)
+            progress_reward += 1 * (current_x_pos - self.max_x_pos)
             self.max_x_pos = current_x_pos
+
+        # print(f"progress_reward max_x_pos: {self.max_x_pos}, current_x_pos: {current_x_pos}, progress_reward: {progress_reward}")
         
         # 进度百分比奖励
         if self.level_length > 0:  # 防止除以零
             progress = current_x_pos / self.level_length
-            progress_reward += 0.1 * progress
+            progress_reward += 0.5 * progress
         
+        # print(f"progress_reward max_x_pos: {self.max_x_pos}, current_x_pos: {current_x_pos}, progress_reward: {progress_reward}")
         # 卡住惩罚机制
         if abs(current_x_pos - self.last_x_pos) < 1:  # 如果位置几乎没变
             self.stuck_counter += 1
@@ -135,8 +138,9 @@ class ProgressRewardWrapper(gym.Wrapper):
                 # 应用卡住惩罚
                 progress_reward -= self.stuck_penalty
                 # 可以根据卡住时间增加惩罚
-                additional_penalty = min(0.5, (self.stuck_counter - self.stuck_threshold) * 0.01)
+                additional_penalty = min(0.2, (self.stuck_counter - self.stuck_threshold) * 0.01)
                 progress_reward -= additional_penalty
+                # print(f"progress_reward max_x_pos: {self.max_x_pos}, current_x_pos: {current_x_pos}, progress_reward: {progress_reward} ")
         else:
             # 重置卡住计数器
             self.stuck_counter = 0
