@@ -85,7 +85,7 @@ class ResizeObservation(gym.ObservationWrapper):
 
 
 class ProgressRewardWrapper(gym.Wrapper):
-    def __init__(self, env, level_length=3000, stuck_threshold=60, stuck_penalty=0.5):
+    def __init__(self, env, level_length=3000, stuck_threshold=80, stuck_penalty=0.5):
         super().__init__(env)
         self.level_length = level_length
         self.max_x_pos = 0
