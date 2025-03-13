@@ -35,11 +35,11 @@ class SkipFrame(gym.Wrapper):
         done = False
         for i in range(self._skip):
             # Accumulate reward and repeat the same action
-            obs, reward, done, info = self.env.step(action)
+            obs, reward, done, truncated, info = self.env.step(action)
             total_reward += reward
             if done:
                 break
-        return obs, total_reward, done, info
+        return obs, total_reward, done, truncated, info
 
 class GrayScaleObservation(gym.ObservationWrapper):
     def __init__(self, env):
@@ -148,7 +148,7 @@ class ProgressRewardWrapper(gym.Wrapper):
         # 更新上一帧位置
         self.last_x_pos = current_x_pos
         
-        return obs, progress_reward, done, info
+        return obs, progress_reward, done, truncated, info
 
 
 class ScoreRewardWrapper(gym.Wrapper):
@@ -174,7 +174,7 @@ class ScoreRewardWrapper(gym.Wrapper):
         return obs
         
     def step(self, action):
-        obs, reward, done, info = self.env.step(action)
+        obs, reward, done, truncated, info = self.env.step(action)
         
         # 基础奖励
         modified_reward = reward
@@ -216,4 +216,4 @@ class ScoreRewardWrapper(gym.Wrapper):
         self.last_score = current_score
         self.last_life = current_life
         
-        return obs, modified_reward, done, info
+        return obs, modified_reward, done, truncated, info
