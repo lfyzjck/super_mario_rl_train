@@ -8,10 +8,11 @@ from pathlib import Path
 # Gym is an OpenAI toolkit for RL
 import torch
 import torch.profiler as profiler
-from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard.writer import SummaryWriter
 # NES Emulator for OpenAI Gym
 from torchvision import transforms as T
-from metrics import MetricLogger
+# Replace MetricLogger with TensorBoardLogger
+from tensorboard_logger import TensorBoardLogger
 from utils import find_latest_checkpoint, create_env
 from agent import Mario
 from wrappers import SkipFrame, GrayScaleObservation, ResizeObservation
@@ -53,6 +54,10 @@ def parse_args():
                     help='enable PyTorch profiler for performance analysis')
     parser.add_argument('--profile-episodes', type=int, default=5,
                     help='number of episodes to profile (default: 5)')
+    parser.add_argument('--log-model', action='store_true',
+                    help='log model weights and gradients to TensorBoard')
+    parser.add_argument('--log-interval', type=int, default=20,
+                    help='interval between logging metrics (default: 20)')
     return parser.parse_args()
 
 
@@ -78,7 +83,17 @@ if __name__ == "__main__":
         burnin=args.burnin
     )
 
-    logger = MetricLogger(save_dir)
+    # Replace MetricLogger with TensorBoardLogger
+    logger = TensorBoardLogger(save_dir)
+    
+    # Log the model architecture if requested
+    if args.log_model:
+        # Create a sample input tensor for the model graph
+        sample_input = torch.zeros((1, 4, 84, 84), dtype=torch.float32)
+        if use_cuda:
+            sample_input = sample_input.cuda()
+        # Add model graph to TensorBoard
+        logger.add_graph(mario.net, sample_input)
 
     print(f"Burnin phase: Agent will explore for {args.burnin} steps before learning starts")
     print(f"Current step: {mario.curr_step}, Learning will start at step: {args.burnin}")
@@ -119,8 +134,8 @@ if __name__ == "__main__":
                 # Learn
                 q, loss = mario.learn()
 
-                # Logging
-                logger.log_step(reward, loss, q)
+                # Logging - pass the action to track action distribution
+                logger.log_step(reward, loss, q, action)
 
                 # Update state
                 state = next_state
@@ -135,8 +150,18 @@ if __name__ == "__main__":
 
         logger.log_episode()
 
-        if e % 20 == 0:
+        if e % args.log_interval == 0:
             logger.record(
                 episode=e, epsilon=mario.exploration_rate, step=mario.curr_step
             )
+            
+            # Log model weights and gradients if requested
+            if args.log_model:
+                logger.log_model_weights(mario.net.online, mario.curr_step)
+                # Only log gradients if we're past the burnin phase
+                if mario.curr_step > args.burnin:
+                    logger.log_model_gradients(mario.net.online, mario.curr_step)
+    
+    # Close the TensorBoard logger
+    logger.close()
 
