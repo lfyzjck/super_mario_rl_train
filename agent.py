@@ -59,7 +59,7 @@ class Mario:
         burnin: float = 1e5,
         learn_every: int = 4,
         sync_every: float = 1e4,
-        memory_size: int = 100000
+        memory_size: int = 50000
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -82,7 +82,10 @@ class Mario:
             self.net = self.net.to(device=self.device)
 
         # set memory storage device
-        self.memory_storage_device = torch.device("cpu")
+        if self.use_cuda:
+            self.memory_storage_device = torch.device("cuda")
+        else:
+            self.memory_storage_device = torch.device("cpu")
 
         # Hyperparameters
         self.exploration_rate = 1

@@ -34,9 +34,9 @@ def create_env() -> gym.Env:
     env = JoypadSpace(env, SIMPLE_MOVEMENT)
 
     # 添加进度奖励
-    env = ProgressRewardWrapper(env)
+    # env = ProgressRewardWrapper(env)
     # 添加得分奖励
-    env = ScoreRewardWrapper(env, score_weight=0.01, death_penalty=10.0)
+    # env = ScoreRewardWrapper(env, score_weight=0.01, death_penalty=10.0)
 
 
     # 跳帧
