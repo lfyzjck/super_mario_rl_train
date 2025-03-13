@@ -28,7 +28,7 @@ def create_env() -> gym.Env:
     """
     Create a Super Mario Bros environment
     """
-    env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0")
+    env = gym_super_mario_bros.make("SuperMarioBros-1-1-v0", new_step_api=True)
 
     # env = JoypadSpace(env, [["right"], ["right", "A"]])
     env = JoypadSpace(env, SIMPLE_MOVEMENT)

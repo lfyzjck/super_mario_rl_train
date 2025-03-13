@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torch import nn
 from tensordict import TensorDict
-from torchrl.data import TensorDictReplayBuffer, LazyMemmapStorage
+from torchrl.data import TensorDictReplayBuffer, LazyMemmapStorage, LazyTensorStorage
 
 
 class MarioNet(nn.Module):
@@ -58,11 +58,14 @@ class Mario:
         gamma: float = 0.9,
         burnin: float = 1e5,
         learn_every: int = 4,
-        sync_every: float = 1e4
+        sync_every: float = 1e4,
+        memory_size: int = 100000
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.save_dir = save_dir
+        # memory size 表示 replay buffer 的大小，默认保存在 cpu 上
+        self.memory_size = memory_size
 
         self.use_cuda = torch.cuda.is_available()
         if torch.backends.mps.is_available():
@@ -78,6 +81,9 @@ class Mario:
         if self.device == "cuda" or self.device == "mps":
             self.net = self.net.to(device=self.device)
 
+        # set memory storage device
+        self.memory_storage_device = torch.device("cpu")
+
         # Hyperparameters
         self.exploration_rate = 1
         self.exploration_rate_decay = 0.99999975
@@ -86,7 +92,7 @@ class Mario:
 
         self.save_every = 3e4  # no. of experiences between saving Mario Net
         self.memory = TensorDictReplayBuffer(
-            storage=LazyMemmapStorage(100000, device=torch.device("cpu"))
+            storage=LazyTensorStorage(self.memory_size, device=self.memory_storage_device)
         )
         self.batch_size = batch_size
         self.gamma = gamma
@@ -206,6 +212,7 @@ class Mario:
         return loss.item()
 
     def sync_Q_target(self):
+        # 同步参数 online net 到 target net
         self.net.target.load_state_dict(self.net.online.state_dict())
 
     def save(self):
@@ -218,7 +225,8 @@ class Mario:
                 'exploration_rate': self.exploration_rate,
                 'curr_step': self.curr_step,
                 'optimizer': self.optimizer.state_dict(),
-                'memory_size': len(self.memory),  # 只保存大小，不保存整个内存
+                'memory_size': len(self.memory),  # Current memory usage
+                'max_memory_size': self.memory_size,  # Maximum memory capacity
             },
             save_path,
         )
@@ -250,11 +258,22 @@ class Mario:
             if 'optimizer' in ckp and self.optimizer is not None:
                 self.optimizer.load_state_dict(ckp['optimizer'])
             
+            # 加载内存大小设置
+            if 'max_memory_size' in ckp:
+                # Only update if different from current setting
+                if self.memory_size != ckp['max_memory_size']:
+                    print(f"Updating memory size from {self.memory_size} to {ckp['max_memory_size']}")
+                    self.memory_size = ckp['max_memory_size']
+                    # Recreate memory buffer with loaded size
+                    self.memory = TensorDictReplayBuffer(
+                        storage=LazyTensorStorage(self.memory_size, device=self.memory_storage_device)
+                    )
+            
             print(f"Successfully loaded model from {load_path}")
             print(f"Current step: {self.curr_step}, Exploration rate: {self.exploration_rate}")
             
             if 'memory_size' in ckp:
-                print(f"Previous memory size: {ckp['memory_size']}")
+                print(f"Previous memory usage: {ckp['memory_size']}")
             
         except Exception as e:
             print(f"Error loading checkpoint: {e}")

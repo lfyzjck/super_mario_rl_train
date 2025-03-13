@@ -104,7 +104,7 @@ class ProgressRewardWrapper(gym.Wrapper):
         return obs
         
     def step(self, action):
-        obs, reward, done, info = self.env.step(action)
+        obs, reward, done, truncated, info = self.env.step(action)
         
         # 基础奖励
         progress_reward = reward
