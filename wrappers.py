@@ -155,25 +155,21 @@ class ProgressRewardWrapper(gym.Wrapper):
 
 
 class ScoreRewardWrapper(gym.Wrapper):
-    def __init__(self, env, score_weight=0.01, death_penalty=5.0):
+    def __init__(self, env, score_weight=0.01):
         """
         基于游戏得分和生命值的奖励包装器
         
         参数:
             env: 环境
             score_weight: 得分奖励的权重系数
-            death_penalty: 死亡惩罚的权重系数
         """
         super().__init__(env)
         self.score_weight = score_weight
-        self.death_penalty = death_penalty
         self.last_score = 0
-        self.last_life = 2  # 默认初始生命值为2
         
     def reset(self):
         obs = self.env.reset()
         self.last_score = 0
-        self.last_life = 2  # 重置生命值
         return obs
         
     def step(self, action):
@@ -184,21 +180,15 @@ class ScoreRewardWrapper(gym.Wrapper):
         
         # 获取当前得分和生命值
         current_score = 0
-        current_life = 2  # 默认值
         
         try:
             if isinstance(info, dict):
                 # 获取得分
                 if 'score' in info:
                     current_score = info['score']
-                
-                # 获取生命值
-                if 'life' in info:
-                    current_life = info['life']
         except (TypeError, KeyError):
             # 如果info不是字典或没有相关键，使用默认值
             current_score = self.last_score
-            current_life = self.last_life
         
         # 计算得分增量
         score_increment = current_score - self.last_score
@@ -207,16 +197,8 @@ class ScoreRewardWrapper(gym.Wrapper):
         if score_increment > 0:
             # 得分奖励与得分增量成正比
             modified_reward += self.score_weight * score_increment
-        
-        # 检测生命值减少（死亡）
-        if current_life < self.last_life:
-            # 应用死亡惩罚
-            modified_reward -= self.death_penalty
-            # 可以在日志中记录死亡事件
-            # print(f"Mario died! Life reduced from {self.last_life} to {current_life}. Applied penalty: {self.death_penalty}")
-        
+
         # 更新上一次得分和生命值
         self.last_score = current_score
-        self.last_life = current_life
         
         return obs, modified_reward, done, truncated, info

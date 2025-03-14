@@ -48,7 +48,7 @@ def parse_args():
                     help='render the game while training')
     parser.add_argument('--burnin', type=int, default=100000,
                     help='number of steps to fill replay buffer before learning starts (default: 100000)')
-    parser.add_argument('--episodes', type=int, default=2000,
+    parser.add_argument('--episodes', type=int, default=5000,
                     help='number of episodes to train (default: 2000)')
     parser.add_argument('--profile', action='store_true',
                     help='enable PyTorch profiler for performance analysis')
@@ -103,6 +103,7 @@ if __name__ == "__main__":
     
     # Training loop
     for e in range(episodes):
+        state = env.reset()
         # Enable profiler only for specific episodes if requested
         profiling = args.profile and e < args.profile_episodes
         
@@ -115,7 +116,6 @@ if __name__ == "__main__":
             prof_context = contextlib.nullcontext()
             
         with prof_context as prof:
-            state = env.reset()
 
             # Play the game!
             while True:
@@ -145,7 +145,7 @@ if __name__ == "__main__":
                     prof.step()
 
                 # Check if end of game
-                if done or (isinstance(info, dict) and info.get("flag_get", False)):
+                if done or info['flag_get']:
                     break
 
         logger.log_episode()

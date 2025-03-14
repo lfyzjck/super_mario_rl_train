@@ -6,13 +6,13 @@ import gym_super_mario_bros
 from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
 from gym.wrappers.frame_stack import FrameStack
 from gym.wrappers.transform_observation import TransformObservation
+# from gym.wrappers.gray_scale_observation import GrayScaleObservation
 from nes_py.wrappers import JoypadSpace
 from wrappers import (
     ScoreRewardWrapper,
     SkipFrame,
-    GrayScaleObservation,
     ResizeObservation,
-    ProgressRewardWrapper,
+    GrayScaleObservation,
 )
 
 
@@ -36,7 +36,7 @@ def create_env() -> gym.Env:
     # 添加进度奖励
     # env = ProgressRewardWrapper(env)
     # 添加得分奖励
-    # env = ScoreRewardWrapper(env, score_weight=0.01, death_penalty=10.0)
+    env = ScoreRewardWrapper(env, score_weight=0.01)
 
 
     # 跳帧
@@ -48,11 +48,5 @@ def create_env() -> gym.Env:
     # 归一化
     env = TransformObservation(env, f=lambda x: x / 255.0)
     env = FrameStack(env, num_stack=4)
-
     env.reset()
-
     return env
-
-
-if __name__ == "__main__":
-    print(find_latest_checkpoint(Path("checkpoints")))
