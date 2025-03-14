@@ -85,6 +85,9 @@ class ResizeObservation(gym.ObservationWrapper):
 
 
 class ProgressRewardWrapper(gym.Wrapper):
+    """
+    这个类是没有意义的，因为进度奖励已经包含在原始奖励中，不需要再额外计算。
+    """
     def __init__(self, env, level_length=3000, stuck_threshold=80, stuck_penalty=0.5):
         super().__init__(env)
         self.level_length = level_length
