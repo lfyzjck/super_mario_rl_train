@@ -1,2 +1,4 @@
 checkpoints
 __pycache__/
+.vscode/
+checkpoints_sb3/
