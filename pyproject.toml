@@ -17,4 +17,5 @@ dependencies = [
     "tensorboard>=2.19.0",
     "tensorboard-plugin-profile>=2.19.0",
     "shimmy[gym-v21]==2.0.0",
+    "gymnasium[other]>=1.0.0",
 ]
