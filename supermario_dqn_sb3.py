@@ -2,7 +2,6 @@ import argparse
 from pathlib import Path
 import datetime
 import gymnasium as gym
-import shimmy
 from gymnasium.wrappers import (
     FrameStackObservation,
     TransformObservation,
@@ -11,6 +10,7 @@ from gymnasium.wrappers import (
     MaxAndSkipObservation,
     RecordVideo,
 )
+from openai_gym_compatibility import register_gymnasium_envs
 from stable_baselines3 import DQN
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.monitor import Monitor
@@ -26,26 +26,50 @@ import torch as th
 import torch.nn.functional as F
 import numpy as np
 
+register_gymnasium_envs()
+
 
 class ScoreRewardWrapper(gym.Wrapper):
-    def __init__(self, env, score_weight=0.01, flag_reward=50):
+    def __init__(
+        self,
+        env,
+        score_weight=0.01,
+        flag_reward=50,
+        timeout_frames=600,
+        position_threshold=10,
+    ):
         """
-        基于游戏得分和旗子状态的奖励包装器
+        基于游戏得分、旗子状态和超时检测的奖励包装器
 
         参数:
             env: 环境
             score_weight: 得分奖励的权重系数
             flag_reward: 得到旗子时的额外奖励
+            timeout_frames: 马里奥停滞不前的最大帧数，超过后判定为卡住
+            position_threshold: 判定为移动的最小距离阈值
         """
         super().__init__(env)
         self.score_weight = score_weight
         self.flag_reward = flag_reward
+        self.timeout_frames = timeout_frames
+        self.position_threshold = position_threshold
         self.last_score = 0
 
+        # 添加位置和超时检测相关变量
+        self.last_x_pos = 0
+        self.no_progress_frames = 0
+        self.max_x_pos = 0
+
     def reset(self, seed=None, options=None):
-        obs = self.env.reset(seed=seed, options=options)
+        obs, info = self.env.reset(seed=seed, options=options)
         self.last_score = 0
-        return obs
+
+        # 重置位置和超时检测变量
+        self.last_x_pos = 0
+        self.no_progress_frames = 0
+        self.max_x_pos = 0
+
+        return obs, info
 
     def step(self, action):
         obs, reward, done, truncated, info = self.env.step(action)
@@ -55,15 +79,21 @@ class ScoreRewardWrapper(gym.Wrapper):
 
         # 获取当前得分
         current_score = 0
+        current_x_pos = 0
 
         try:
             if isinstance(info, dict):
                 # 获取得分
                 if "score" in info:
                     current_score = info["score"]
+
+                # 获取当前x坐标
+                if "x_pos" in info:
+                    current_x_pos = info["x_pos"]
         except (TypeError, KeyError):
             # 如果info不是字典或没有相关键，使用默认值
             current_score = self.last_score
+            current_x_pos = self.last_x_pos
 
         # 计算得分增量
         score_increment = current_score - self.last_score
@@ -73,188 +103,65 @@ class ScoreRewardWrapper(gym.Wrapper):
             # 得分奖励与得分增量成正比
             modified_reward += float(self.score_weight * score_increment)
 
+        # 超时检测逻辑
+        # 更新最大前进位置
+        if current_x_pos > self.max_x_pos:
+            self.max_x_pos = current_x_pos
+            # 重置停滞帧计数
+            self.no_progress_frames = 0
+            # 给予前进奖励（可选）
+            modified_reward += 0.1  # 小幅奖励前进行为
+        else:
+            # 如果没有前进超过阈值，增加停滞帧计数
+            x_diff = abs(current_x_pos - self.last_x_pos)
+            if x_diff < self.position_threshold:
+                self.no_progress_frames += 1
+            else:
+                # 即使没有突破最大距离，但只要有移动也减少计数（避免惩罚探索行为）
+                self.no_progress_frames = max(0, self.no_progress_frames - 1)
+
+        # 如果停滞帧数超过阈值且游戏未结束，提前终止
+        if self.no_progress_frames >= self.timeout_frames and not done:
+            done = True
+            truncated = True
+            modified_reward -= 10.0  # 因卡住而终止给予负面奖励
+
         if done:
             # 检查是否得到旗子
-            if info["flag_get"]:
+            if info.get("flag_get", False):
                 modified_reward += float(self.flag_reward)
             else:
-                modified_reward -= float(self.flag_reward)
+                # 如果是因为超时终止，降低惩罚（因为可能只是卡住，不是真正失败）
+                if self.no_progress_frames >= self.timeout_frames:
+                    modified_reward -= float(self.flag_reward / 2)
+                else:
+                    modified_reward -= float(self.flag_reward)
 
-        # 更新上一次得分
+        # 更新上一次得分和位置
         self.last_score = current_score
+        self.last_x_pos = current_x_pos
 
         return obs, modified_reward, done, truncated, info
 
 
-class PrioritizedReplayBuffer(ReplayBuffer):
-    """
-    Prioritized Experience Replay (PER) buffer.
-
-    Preferentially samples transitions with higher TD errors to accelerate learning.
-
-    Paper: https://arxiv.org/abs/1511.05952
-    """
-
-    def __init__(
-        self,
-        buffer_size: int,
-        observation_space: gym.spaces.Space,
-        action_space: gym.spaces.Space,
-        device: Union[th.device, str] = "auto",
-        n_envs: int = 1,
-        optimize_memory_usage: bool = False,
-        handle_timeout_termination: bool = True,
-        per_alpha: float = 0.6,
-        per_beta: float = 0.4,
-        per_beta_increment: float = 0.001,
-        per_epsilon: float = 1e-6,
-    ):
-        """
-        Initialize the PrioritizedReplayBuffer.
-
-        Args:
-            buffer_size: Max number of transitions to store
-            observation_space: Observation space
-            action_space: Action space
-            device: PyTorch device
-            n_envs: Number of parallel environments
-            optimize_memory_usage: Enable memory efficient mode
-            handle_timeout_termination: Handle timeout termination properly
-            per_alpha: How much prioritization to use (0 = no prioritization, 1 = full prioritization)
-            per_beta: Importance sampling weight (0 = no correction, 1 = full correction)
-            per_beta_increment: Increment of beta parameter per sampling
-            per_epsilon: Small constant to ensure non-zero priority
-        """
-        super().__init__(
-            buffer_size,
-            observation_space,
-            action_space,
-            device,
-            n_envs=n_envs,
-            optimize_memory_usage=optimize_memory_usage,
-            handle_timeout_termination=handle_timeout_termination,
-        )
-
-        # PER parameters
-        self.alpha = per_alpha
-        self.beta = per_beta
-        self.beta_increment_per_sampling = per_beta_increment
-        self.epsilon = per_epsilon
-
-        # Priority storage with same size as replay buffer
-        self.priorities = np.zeros((buffer_size,), dtype=np.float32)
-
-        # Initial max priority for new items
-        self.max_priority = 1.0
-
-        # Store current indices for updating priorities
-        self.current_indices = None
-
-    def add(
-        self,
-        obs: np.ndarray,
-        next_obs: np.ndarray,
-        action: np.ndarray,
-        reward: np.ndarray,
-        done: np.ndarray,
-        infos: List[Dict[str, Any]],
-    ) -> None:
-        """
-        Add a new transition to the buffer with max priority.
-        """
-        # Call parent add method to handle the basic buffers
-        idx = self.pos
-        super().add(obs, next_obs, action, reward, done, infos)
-
-        # New transitions get max priority to ensure they're sampled at least once
-        self.priorities[idx] = self.max_priority
-
-    def sample(
-        self, batch_size: int, env: Optional[VecNormalize] = None
-    ) -> ReplayBufferSamples:
-        """
-        Sample a batch of transitions with prioritized sampling.
-
-        Returns:
-            ReplayBufferSamples: standard samples with additional attributes
-        """
-        # Calculate sampling probabilities based on priorities
-        if self.full:
-            priorities = self.priorities
-        else:
-            priorities = self.priorities[: self.pos]
-
-        # Convert priorities to probabilities with alpha
-        probabilities = priorities**self.alpha
-        probabilities /= probabilities.sum()
-
-        # Sample indices based on probabilities
-        indices = np.random.choice(len(probabilities), size=batch_size, p=probabilities)
-
-        # Update beta value
-        self.beta = min(1.0, self.beta + self.beta_increment_per_sampling)
-
-        # Calculate importance sampling weights
-        weights = (len(probabilities) * probabilities[indices]) ** (-self.beta)
-        weights /= weights.max()  # Normalize weights
-
-        # Store current indices for updating priorities later
-        self.current_indices = indices
-
-        # Use parent class's sample method to get samples
-        # Type safety: we're explicitly overriding the parent method's signature
-        samples = super().sample(batch_size, env)
-
-        # Add weights and indices as custom attributes
-        # Using setattr to add attributes at runtime
-        weights_tensor = th.tensor(
-            weights, dtype=th.float32, device=samples.observations.device
-        )
-        samples_dict = samples.__dict__
-        samples_dict["weights"] = weights_tensor
-        samples_dict["indices"] = indices
-
-        return samples
-
-    def update_priorities(self, indices: np.ndarray, priorities: np.ndarray) -> None:
-        """
-        Update priorities based on TD errors.
-
-        Args:
-            indices: Indices of samples to update
-            priorities: New priorities (TD errors)
-        """
-        # Add small epsilon to ensure non-zero probability
-        priorities = priorities + self.epsilon
-
-        # Update priorities
-        self.priorities[indices] = priorities
-
-        # Update max priority for new items
-        self.max_priority = max(self.max_priority, priorities.max())
-
-
 class DoubleDQN(DQN):
     """
-    Double Deep Q-Network (Double DQN) with Prioritized Experience Replay
+    Double Deep Q-Network (Double DQN)
 
     Paper: https://arxiv.org/abs/1509.06461
 
     The main difference with regular DQN is that Double DQN uses the online network
     to select actions and the target network to evaluate these actions in the computation
     of the target Q-values.
-
-    This implementation also includes Prioritized Experience Replay.
     """
 
     def __init__(self, *args, **kwargs):
-        # Initialize parent class - now we rely on the replay_buffer_class and replay_buffer_kwargs
-        # DQN will handle the creation of our PrioritizedReplayBuffer
+        # Initialize parent class
         super().__init__(*args, **kwargs)
 
     def train(self, gradient_steps: int, batch_size: int = 100) -> None:
         """
-        Modified training method to support prioritized experience replay.
+        Modified training method to implement Double DQN.
         """
         # Switch to train mode (this affects batch norm / dropout)
         self.policy.set_training_mode(True)
@@ -271,7 +178,7 @@ class DoubleDQN(DQN):
                 )
                 break
 
-            # Sample replay buffer with priorities
+            # Sample replay buffer
             replay_data = self.replay_buffer.sample(
                 batch_size, env=self._vec_normalize_env
             )
@@ -305,26 +212,8 @@ class DoubleDQN(DQN):
                 current_q_values, dim=1, index=replay_data.actions.long()
             )
 
-            # Compute TD errors for priority updating
-            td_errors = (
-                th.abs(target_q_values - current_q_values)
-                .detach()
-                .cpu()
-                .numpy()
-                .flatten()
-            )
-
-            # Check if weights attribute exists (using PrioritizedReplayBuffer)
-            if hasattr(replay_data, "__dict__") and "weights" in replay_data.__dict__:
-                # Apply importance sampling weights from PER
-                weighted_loss = F.smooth_l1_loss(
-                    current_q_values, target_q_values, reduction="none"
-                )
-                weights = replay_data.__dict__["weights"].reshape(-1, 1)
-                loss = (weighted_loss * weights).mean()
-            else:
-                # Fallback to regular loss if not using PER
-                loss = F.smooth_l1_loss(current_q_values, target_q_values)
+            # 计算损失
+            loss = F.smooth_l1_loss(current_q_values, target_q_values)
 
             losses.append(loss.item())
 
@@ -334,15 +223,6 @@ class DoubleDQN(DQN):
             # Clip gradient norm
             th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
             self.policy.optimizer.step()
-
-            # Update priorities in the replay buffer if it's a PrioritizedReplayBuffer
-            if (
-                isinstance(self.replay_buffer, PrioritizedReplayBuffer)
-                and hasattr(replay_data, "__dict__")
-                and "indices" in replay_data.__dict__
-            ):
-                indices = replay_data.__dict__["indices"]
-                self.replay_buffer.update_priorities(indices, td_errors)
 
         # Increase update counter
         self._n_updates += gradient_steps
@@ -446,24 +326,6 @@ def parse_args():
         help="random seed (default: 42)",
     )
     parser.add_argument(
-        "--per-alpha",
-        type=float,
-        default=0.6,
-        help="alpha parameter for prioritized replay buffer (default: 0.6)",
-    )
-    parser.add_argument(
-        "--per-beta",
-        type=float,
-        default=0.4,
-        help="initial beta parameter for prioritized replay buffer (default: 0.4)",
-    )
-    parser.add_argument(
-        "--per-beta-increment",
-        type=float,
-        default=0.001,
-        help="increment for beta parameter per sampling (default: 0.001)",
-    )
-    parser.add_argument(
         "--render", action="store_true", help="render the environment during evaluation"
     )
     parser.add_argument(
@@ -495,6 +357,19 @@ def parse_args():
         default=10000,
         help="maximum length of recorded videos in steps (default: 10000)",
     )
+    # 添加超时检测相关参数
+    parser.add_argument(
+        "--timeout-frames",
+        type=int,
+        default=600,
+        help="maximum number of frames Mario can be stuck before early termination (default: 600)",
+    )
+    parser.add_argument(
+        "--position-threshold",
+        type=int,
+        default=10,
+        help="minimum distance Mario must move to not be considered stuck (default: 10)",
+    )
     return parser.parse_args()
 
 
@@ -503,6 +378,8 @@ def make_env(
     record_video=False,
     video_folder=None,
     seed=0,
+    timeout_frames=600,
+    position_threshold=10,
 ):
     """Create the wrapped environment for training or evaluation"""
     # Set appropriate render mode
@@ -520,15 +397,20 @@ def make_env(
     )
 
     env = JoypadSpace(env, SIMPLE_MOVEMENT)
+
+    # 添加得分奖励和超时检测
+    env = ScoreRewardWrapper(
+        env,
+        score_weight=0.02,
+        timeout_frames=timeout_frames,
+        position_threshold=position_threshold,
+    )
     # 归一化
     env = MaxAndSkipObservation(env, skip=4)
     env = ResizeObservation(env, shape=(84, 84))
     env = GrayscaleObservation(env)
     # env = TransformObservation(env, func=lambda x: x / 255.0)
     env = FrameStackObservation(env, stack_size=4)
-
-    # 添加得分奖励
-    env = ScoreRewardWrapper(env, score_weight=0.02)
     # 将 RecordVideo 移到所有预处理包装器之后
     # Record video if specified - 放在最后以确保录制的是最终处理后的画面
     if record_video and video_folder is not None:
@@ -537,9 +419,6 @@ def make_env(
             video_folder=video_folder,
             name_prefix="mario-eval",
         )
-
-    env = Monitor(env)  # Needed for the callbacks
-
     env.reset(seed=seed)
     return env
 
@@ -567,16 +446,19 @@ if __name__ == "__main__":
                 seed=args.seed,
                 record_video=args.record_video,
                 video_folder=str(video_dir) if video_dir else None,
+                timeout_frames=args.timeout_frames,
+                position_threshold=args.position_threshold,
             )
         ]
     )
-    # env = VecFrameStack(env, n_stack=4)
 
     eval_env = DummyVecEnv(
         [
             lambda: make_env(
                 render=args.render,
                 seed=args.seed,
+                timeout_frames=args.timeout_frames,
+                position_threshold=args.position_threshold,
             )
         ]
     )
@@ -605,11 +487,25 @@ if __name__ == "__main__":
     # 检查是否需要加载已保存的模型
     if args.load_model:
         print(f"Loading model from {args.load_model}")
-        model = DoubleDQN.load(args.load_model, env=env)
+        model = DoubleDQN.load(
+            args.load_model,
+            env=env,
+            device=args.device,
+            buffer_size=args.buffer_size,
+            learning_starts=args.learning_starts,
+            batch_size=args.batch_size,
+            train_freq=args.train_freq,
+            gradient_steps=args.gradient_steps,
+            target_update_interval=args.target_update_interval,
+            exploration_fraction=args.exploration_fraction,
+            exploration_initial_eps=args.exploration_initial_eps,
+            exploration_final_eps=args.exploration_final_eps,
+            tensorboard_log=str(save_dir / "tb_logs"),
+        )
         # 可以选择更新学习率等参数
         model.learning_rate = args.learning_rate
     else:
-        # Initialize the DoubleDQN agent with prioritized experience replay
+        # Initialize the DoubleDQN agent
         model = DoubleDQN(
             "CnnPolicy",
             env,
@@ -623,14 +519,6 @@ if __name__ == "__main__":
             exploration_fraction=args.exploration_fraction,
             exploration_initial_eps=args.exploration_initial_eps,
             exploration_final_eps=args.exploration_final_eps,
-            # 使用 replay_buffer_class 和 replay_buffer_kwargs 参数来初始化优先经验回放
-            replay_buffer_class=PrioritizedReplayBuffer,
-            replay_buffer_kwargs={
-                "per_alpha": args.per_alpha,
-                "per_beta": args.per_beta,
-                "per_beta_increment": args.per_beta_increment,
-                "per_epsilon": 1e-6,
-            },
             tensorboard_log=str(save_dir / "tb_logs"),
             device=args.device,
             verbose=1,
