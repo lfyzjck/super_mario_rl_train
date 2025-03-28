@@ -7,7 +7,6 @@
 MODEL_PATH="checkpoints_ppo_sb3/2025-03-27T22-18-07/mario_model_2050000_steps.zip"
 VECNORM_PATH="checkpoints_ppo_sb3/2025-03-27T22-18-07/mario_model_vecnormalize_2050000_steps.pkl"
 EPISODES=3
-RENDER=true
 CAPTURE_VIDEO=false
 DEVICE="auto"
 VIDEO_FOLDER="./videos"
@@ -20,7 +19,6 @@ function show_help {
   echo "  --vecnorm PATH    Path to the VecNormalize statistics file (default: latest stats)"
   echo "  --episodes N      Number of episodes to evaluate (default: 3)"
   echo "  --video           Record videos of the gameplay (default: false)"
-  echo "  --no-render       Don't render in human mode, use for headless evaluation"
   echo "  --device DEVICE   Device to use for inference (cpu, cuda, auto) (default: auto)"
   echo "  --help            Show this help message"
   exit 0
@@ -45,10 +43,6 @@ while [[ $# -gt 0 ]]; do
       CAPTURE_VIDEO=true
       shift
       ;;
-    --no-render)
-      RENDER=false
-      shift
-      ;;
     --device)
       DEVICE="$2"
       shift 2
@@ -63,12 +57,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Construct render flag
-RENDER_FLAG=""
-if [ "$RENDER" = true ]; then
-  RENDER_FLAG="--render"
-fi
-
 # Construct video flag
 VIDEO_FLAG=""
 if [ "$CAPTURE_VIDEO" = true ]; then
@@ -79,7 +67,6 @@ echo "Evaluating Mario model..."
 echo "Model path: $MODEL_PATH"
 echo "VecNormalize path: $VECNORM_PATH"
 echo "Episodes: $EPISODES"
-echo "Render: $RENDER"
 echo "Capture video: $CAPTURE_VIDEO"
 echo "Device: $DEVICE"
 echo "Video folder: $VIDEO_FOLDER"
@@ -92,7 +79,7 @@ python ppo_eval.py \
   --eval-episodes "$EPISODES" \
   --device "$DEVICE" \
   --video-folder "$VIDEO_FOLDER" \
-  $RENDER_FLAG $VIDEO_FLAG
+  $VIDEO_FLAG
 
 # Check for result
 if [ $? -eq 0 ]; then

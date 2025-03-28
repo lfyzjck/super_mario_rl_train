@@ -12,13 +12,15 @@ from gymnasium.wrappers import (
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack, VecNormalize
+from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack, VecNormalize, SubprocVecEnv
 import torch as th
 import numpy as np
 from joypad_space import JoypadSpace
 from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
 
 register_gymnasium_envs()
+
+CHECKPOINT_PREFIX = "mario_model"
 
 
 class ScoreRewardWrapper(gym.Wrapper):
@@ -311,27 +313,21 @@ def make_env(
 
     def _init():
 
-        # Record video if specified - 放在最后以确保录制的是最终处理后的画面
+        env = gym.make(
+            "GymV21Environment-v0",
+            env_id="SuperMarioBros-1-1-v0",
+            render_mode=render_mode,
+        )
+
+        # env = gym.wrappers.RecordEpisodeStatistics(env)
+        env = JoypadSpace(env, SIMPLE_MOVEMENT)
         if record_video and video_folder is not None and idx == 0:
-            env = gym.make(
-                "GymV21Environment-v0",
-                env_id="SuperMarioBros-1-1-v0",
-                render_mode=render_mode,
-            )
+        # Record video if specified - 放在最后以确保录制的是最终处理后的画面
             env = gym.wrappers.RecordVideo(
                 env,
                 video_folder=video_folder,
                 name_prefix=f"mario-eval-{rank}",
             )
-        else:
-            env = gym.make(
-                "GymV21Environment-v0",
-                env_id="SuperMarioBros-1-1-v0",
-                render_mode=render_mode,
-            )
-
-        env = gym.wrappers.RecordEpisodeStatistics(env)
-        env = JoypadSpace(env, SIMPLE_MOVEMENT)
 
         # 添加得分奖励和超时检测
         env = ScoreRewardWrapper(
@@ -392,7 +388,8 @@ if __name__ == "__main__":
             )
         )
 
-    env = DummyVecEnv(envs)
+    # Replace DummyVecEnv with SubprocVecEnv for true multiprocessing
+    env = SubprocVecEnv(envs)
     # Optional: Add VecNormalize for observation and reward normalization
     env = VecNormalize(
         env,
@@ -405,7 +402,7 @@ if __name__ == "__main__":
         epsilon=1e-8,
     )
 
-    # Create a separate environment for evaluation
+    # Create a separate environment for evaluation - keep this as DummyVecEnv since we only need one eval env
     eval_env = DummyVecEnv(
         [
             make_env(
@@ -438,7 +435,7 @@ if __name__ == "__main__":
     checkpoint_callback = CheckpointCallback(
         save_freq=args.save_freq // args.num_envs,  # Adjust for number of envs
         save_path=str(save_dir),
-        name_prefix="mario_model",
+        name_prefix=CHECKPOINT_PREFIX,
         save_vecnormalize=True,
     )
 
@@ -456,6 +453,22 @@ if __name__ == "__main__":
     # 检查是否需要加载已保存的模型
     if args.load_model:
         print(f"Loading model from {args.load_model}")
+
+        current_chkp_step = args.load_model.split("_")[-2]
+        
+        # 检查是否存在对应的VecNormalize文件
+        vec_normalize_path = Path(args.load_model).parent / f"{CHECKPOINT_PREFIX}_vecnormalize_{current_chkp_step}_steps.pkl"
+        if vec_normalize_path.exists():
+            print(f"Loading VecNormalize statistics from {vec_normalize_path}")
+            env = VecNormalize.load(str(vec_normalize_path), env)
+            # 同步评估环境的normalization统计信息
+            eval_env = VecNormalize.load(str(vec_normalize_path), eval_env)
+            # 在评估时不更新统计信息
+            eval_env.training = False
+            eval_env.norm_reward = True
+        else:
+            print("No VecNormalize statistics found. Using new statistics.")
+        
         model = PPO.load(
             args.load_model,
             env=env,

@@ -3,3 +3,5 @@ __pycache__/
 .vscode/
 checkpoints_sb3/
 checkpoints_ppo_sb3/
+.DS_Store
+videos
